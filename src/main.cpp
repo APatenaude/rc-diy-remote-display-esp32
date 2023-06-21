@@ -68,21 +68,19 @@ MonitoringChannel monitoredChannels[] = {
 	{true, "Prev time", "channel(device(lap), previous_lap_time)*1000", 0.001, false, false},
 	{true, "Best lap", "channel(device(lap), best_lap_number)", 1.0, false, false},
 	{true, "Best time", "channel(device(lap), best_lap_time)*1000", 0.001, false, false},
-	{true, "Speed Delta", "channel(device(gps), delta_speed)*100", 0.036, false, false},
+	{true, "Speed Delta", "channel(device(gps), delta_speed)*100", 0.0363, false, false}, // 0.363 multiplier to fix strange values from racechrono
 	{true, "Time Delta", "channel(device(lap), delta_lap_time)*1000", 0.001, false, false},
 	{true, "Comparison time", "channel(device(lap), comparison_lap_time)*1000", 0.001, false, false},
 	{false, "Update Rate", "channel(device(gps), device_update_rate)*10", 0.1, false, false},
 	{true, "Satellites", "channel(device(gps), satellites)", 1.0, false, false},
 	{false, "Stint", "channel(device(gps), elapsed_time)", 1.0, false, false},
-	{false, "Speed", "channel(device(gps), speed)*10", 0.36, false, false},
+	{false, "Speed", "channel(device(gps), speed)*10", 0.363, false, false}, // 0.363 multiplier to fix strange values from racechrono
 };
 
 bool receivedData = false;
 bool removedLapTime = false;
 int lapNumber = 0;
-unsigned long newLapStartTime = 0;
 float lapTime = 0;
-unsigned long lapTimeMillis = 0;
 float prevLapTime = 0;
 int bestLapNumber = 0;
 float bestLapTime = 0;
@@ -90,7 +88,6 @@ float prevSpeedDelta = 0;
 float speedDelta = 0;
 float prevTimeDelta = 0;
 float timeDelta = 0;
-int newLapMs = 0;
 float predictedLapTime = 0;
 float comparisonLapTime = 0;
 bool usingComparisonLap = false;
@@ -152,6 +149,7 @@ void drawStatus(bool increaseInterval = false)
 	tft.setTextColor(TFT_WHITE, TFT_BLACK);
 	tft.setTextDatum(TC_DATUM);
 
+	// move the status around to prevent image retention
 	if (increaseInterval)
 	{
 		tft.fillRect(0, statusYPos, tft.width(), 40);
@@ -188,10 +186,9 @@ void drawTimeDelta()
 {
 	selectScreen(SCREEN1);
 
-	// const float value = (prevLapTimeDelta != 0 && newLapMs > 0 && ((millis() - newLapMs) < 5000)) ? prevLapTimeDelta : timeDelta;
 	const float value = timeDelta;
 
-	const int color = value >= 0 ? tft.color565(255, 0, 0) : tft.color565(0, 255, 0);
+	const int color = value >= 0 ? TFT_RED : TFT_GREEN;
 	const float deltaAbs = fabs(value);
 	const int digits = (deltaAbs >= 1000 ? 0 : (deltaAbs >= 100 ? 1 : (deltaAbs >= 10 ? 2 : 3)));
 
@@ -375,11 +372,7 @@ void drawLapTime(bool useMillis)
 {
 	selectScreen(SCREEN2);
 
-	std::string str;
-	if (!useMillis)
-		str = getFloatTimeString(lapTime);
-	else
-		str = getMillisTimeString(lapTimeMillis);
+	std::string str = getFloatTimeString(lapTime);
 
 	tft.setTextSize(0.75);
 	tft.setTextPadding(tft.textWidth("8:88.88", &fonts::Font8));
@@ -636,7 +629,6 @@ void drawBatteryLevel()
 	tft.setTextPadding(tft.textWidth("8.88v", &fonts::Font2));
 	tft.setTextColor(TFT_WHITE, TFT_BLACK);
 	tft.setTextDatum(BR_DATUM);
-	// tft.drawString(String(batteryLevel) + "%", 285, 240, 2);
 	tft.drawString(String(batteryVoltage) + "v", tft.width() - 35, tft.height(), &fonts::Font2);
 }
 
@@ -792,6 +784,7 @@ void checkChannelsConfigured()
 	{
 		if (!monitoredChannels[i].enabled)
 		{
+			// skip if not enabled
 			monitoredChannels[i].configuring = false;
 			monitoredChannels[i].configured = true;
 			continue;
@@ -799,13 +792,13 @@ void checkChannelsConfigured()
 
 		if (monitoredChannels[i].configuring || !monitoredChannels[i].configured)
 		{
-			// Serial.print(monitoredChannels[i].name);
-			// Serial.println(" NOT CONFIGURED");
+			// not done
 			configured = false;
 		}
 
 		if (!monitoredChannels[i].configured && !monitoredChannels[i].configuring)
 		{
+			// add if not configured
 			Serial.print("add monitor : ");
 			Serial.println(monitoredChannels[i].name);
 			monitoredChannels[i].configuring = true;
@@ -816,6 +809,7 @@ void checkChannelsConfigured()
 
 	if (configured)
 	{
+		// all configured
 		Serial.println("--CONFIGURED--");
 		isConfigured = configured;
 		if (!receivedData)
@@ -823,18 +817,19 @@ void checkChannelsConfigured()
 			status = STATUS_DATA;
 			drawStatus();
 		}
-		// sendUpdateCommand();
 	}
 }
 
+// callbacks for monitoring configuration
 class ConfigCallbacks : public BLECharacteristicCallbacks
 {
+	// status of the sent payload from ble stack
 	void onStatus(BLECharacteristic *pCharacteristic, Status s, uint32_t code)
 	{
 		const std::string value = pCharacteristic->getValue();
 		const int command = (int)value[0];
 		const int monitorId = (int)value[1];
-		Serial.print(command == 4 ? "Update All" : monitoredChannels[monitorId].name);
+		Serial.print(command == CMD_TYPE_UPDATE_ALL ? "Update All" : monitoredChannels[monitorId].name);
 		Serial.print(" : ");
 
 		switch (s)
@@ -898,9 +893,10 @@ class ConfigCallbacks : public BLECharacteristicCallbacks
 		}
 	};
 
+	// response notification from racechrono
 	void onWrite(BLECharacteristic *pCharacteristic, esp_ble_gatts_cb_param_t *param)
 	{
-		if (true || pCharacteristic->getLength() > 0)
+		if (pCharacteristic->getLength() > 0)
 		{
 			std::string value = pCharacteristic->getValue();
 			const int result = (int)value[0];
@@ -934,26 +930,37 @@ class ConfigCallbacks : public BLECharacteristicCallbacks
 	};
 };
 
+// main callbacks for monitored values
 class MonitorCallbacks : public BLECharacteristicCallbacks
 {
 	void onWrite(BLECharacteristic *pCharacteristic, esp_ble_gatts_cb_param_t *param)
 	{
-
 		if (pCharacteristic->getLength() > 0)
 		{
+			// 20 bytes, 4 values max
+			// byte 0 = monitor id, byte 1-4 = value
 			std::string value = pCharacteristic->getValue();
+			// int x = 0;
+			// while (x + 5 <= pCharacteristic->getLength())
+			// {
+			// 	Serial.print((int)value[x]);
+			// 	Serial.print(" : ");
+			// 	int32_t data = value[x + 1] << 24 | value[x + 2] << 16 | value[x + 3] << 8 | value[x + 4];
+			// 	Serial.print(data * monitoredChannels[(int)value[x]].multiplier);
+			// 	Serial.println(" | ");
+			// 	x += 5;
+			// }
+			// Serial.println(" -- ");
 			int dataPos = 0;
 			while (dataPos + 5 <= pCharacteristic->getLength())
-
 			{
 				int monitorId = (int)value[dataPos];
 
 				int32_t data = value[dataPos + 1] << 24 | value[dataPos + 2] << 16 | value[dataPos + 3] << 8 | value[dataPos + 4];
-				if (monitorId < sizeof monitoredChannels && data < 2147483647)
+				if (monitorId < sizeof monitoredChannels && data < INT_MAX) // weird stuff with values of int max sometimes received
 				{
 					if (receivedData == false)
 					{
-
 						receivedData = true;
 						status = 0;
 						vTaskDelete(batteryStatusTaskHandle);
@@ -964,20 +971,15 @@ class MonitorCallbacks : public BLECharacteristicCallbacks
 
 					float value = (float)data * monitoredChannels[monitorId].multiplier;
 
-					Serial.print(monitoredChannels[monitorId].name);
-					Serial.print(" : ");
-					Serial.print(value);
-					Serial.println();
+					// Serial.print(monitoredChannels[monitorId].name);
+					// Serial.print(" : ");
+					// Serial.print(value);
+					// Serial.println();
 
 					switch (monitorId)
 					{
 					// 0 - Lap Number
 					case 0:
-						if (lapNumber != value)
-						{
-							newLapStartTime = millis();
-						}
-
 						lapNumber = value;
 						drawLapNumber();
 
@@ -985,14 +987,8 @@ class MonitorCallbacks : public BLECharacteristicCallbacks
 
 					// 1 - Lap Time
 					case 1:
-						if (lapNumber >= 2)
-						{
-							xTaskCreatePinnedToCore(removeLaptimeTask, "remove lap time", 4096, NULL, 0, NULL, 1);
-						}
-
 						lapTime = value;
-						if (!removedLapTime)
-							drawLapTime(false);
+						drawLapTime(false);
 
 						break;
 
@@ -1049,10 +1045,12 @@ class MonitorCallbacks : public BLECharacteristicCallbacks
 
 						break;
 
-					// 7 - Time comparison
+					// 7 - comparison lap time
 					case 7:
 						if (lapNumber < 2)
 						{
+							// if received comparison lap on 1st lap or before, then def. using seperate comparison lap
+							// event if not set in app, best lap is also sent as comparison lap, which is why this is needed
 							usingComparisonLap = true;
 						}
 						comparisonLapTime = value;
@@ -1066,42 +1064,46 @@ class MonitorCallbacks : public BLECharacteristicCallbacks
 						drawSatellites();
 
 						break;
+
+					// 11 - speed
+					case 11:
+						// satellites = value;
+						// drawSatellites();
+
+						break;
 					}
 				}
 				dataPos += 5;
 
-				if (receivedData)
-				{
-					currentTime = millis();
-					if (currentTime - previousTimeIntervalTime >= timeInterval)
-					{
-						drawStintTime();
-						if (newLapStartTime > 0 && removedLapTime)
-						{
-							lapTimeMillis = currentTime - newLapStartTime;
-							drawLapTime(true);
-						}
-					}
-					if (currentTime - previousBatteryIntervalTime >= batteryInterval)
-					{
-						previousBatteryIntervalTime = currentTime;
-
-						drawBattery();
-					}
-				}
-
 				delay(1);
+			}
+
+			if (receivedData)
+			{
+				// draw stint time and battery here
+				// tried to seperate it so its not tied to the reception of ble notification
+				// but absolutely nothing else worked, weird concurrency issues with the TFTs
+				currentTime = millis();
+				if (currentTime - previousTimeIntervalTime >= timeInterval)
+				{
+					drawStintTime();
+				}
+				if (currentTime - previousBatteryIntervalTime >= batteryInterval)
+				{
+					previousBatteryIntervalTime = currentTime;
+
+					drawBattery();
+				}
 			}
 		}
 	}
 };
 
+// callbacks for clients connection status
 class ServerCallbacks : public BLEServerCallbacks
 {
 	void onConnect(BLEServer *BLE_server)
 	{
-		// delay(1000);
-
 		deviceConnected = true;
 		startTime = millis();
 		Serial.println("[I] Bluetooth client connected!");
@@ -1114,7 +1116,6 @@ class ServerCallbacks : public BLEServerCallbacks
 		deviceConnected = false;
 		isConfigured = false;
 		receivedData = false;
-		newLapStartTime = 0;
 		for (int i = 0; i < (sizeof(monitoredChannels) / sizeof(monitoredChannels[0])); i++)
 		{
 			monitoredChannels[i].configured = false;
@@ -1127,15 +1128,13 @@ class ServerCallbacks : public BLEServerCallbacks
 
 		status = STATUS_CONNECTION;
 		xTaskCreatePinnedToCore(batteryStatusTask, "Battery & Status Task", 2048, NULL, 0, &batteryStatusTaskHandle, 0);
-
-		// clearScreens();
-		// drawStatus();
 	}
 };
 
 // BLE configuration
-void configBLE(/*void *pvParameters*/)
+void configBLE()
 {
+	// name of device
 	BLEDevice::init("RC_DYI_MONITOR_AP");
 
 	BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_DEFAULT);
@@ -1165,19 +1164,12 @@ void configBLE(/*void *pvParameters*/)
 	BLEAdvertising *BLE_advertising = BLEDevice::getAdvertising();
 	BLE_advertising->addServiceUUID(RACECHRONO_UUID);
 	BLE_advertising->setScanResponse(false);
-	BLE_advertising->setMinInterval(35);
-	BLE_advertising->setMaxInterval(150);
+	BLE_advertising->setMinInterval(35); // 35 is lowest value that works
+	BLE_advertising->setMaxInterval(100);
 	BLEDevice::startAdvertising();
 
 	status = STATUS_CONNECTION;
 	xTaskCreatePinnedToCore(batteryStatusTask, "Battery & Status Task", 2048, NULL, 0, &batteryStatusTaskHandle, 0);
-
-	// delay(1000);
-	// tft.fillScreen(TFT_BLACK);
-	// drawWaitingConnection();
-	// drawBattery();
-
-	// vTaskDelete(NULL);
 }
 
 void setup()
@@ -1185,13 +1177,14 @@ void setup()
 	// Initialize Serial port
 	Serial.begin(115200);
 
+	// need spiffs for images
 	if (!SPIFFS.begin())
 	{
 		Serial.println("SPIFFS initialisation failed!");
 		while (1)
 			yield(); // Stay here twiddling thumbs waiting
 	}
-	Serial.println("\r\nSPIFFS available!");
+	Serial.println("SPIFFS available!");
 
 	pinMode(SCREEN1, OUTPUT);
 	pinMode(SCREEN2, OUTPUT);
@@ -1204,6 +1197,7 @@ void setup()
 	tft.fillScreen(TFT_BLACK);
 	tft.setSwapBytes(true);
 
+	// display logo while configuring ble
 	TJpgDec.setJpgScale(1);
 	TJpgDec.setCallback(tft_output);
 	TJpgDec.drawFsJpg(0, tft.height() / 2 - 45, "/timerdisplaylogo.jpg");
@@ -1211,61 +1205,14 @@ void setup()
 	configBLE();
 }
 
-bool firstLoop = true;
 void loop()
 {
-
 	if (deviceConnected)
 	{
 		if (!isConfigured)
 		{
+			// continually check if all the channels are configured or configuring
 			checkChannelsConfigured();
 		}
 	}
-
-	// currentTime = millis();
-	// if (currentTime - previousIntervalTime >= batteryInterval)
-	// {
-	// 	previousIntervalTime = currentTime; // Update the previous time
-
-	// 	if (status > 0)
-	// 	{
-	// 		if (firstLoop)
-	// 		{
-	// 			// clearScreens();
-	// 			xEventGroupSetBits(displayEventGroup, CLEAR_SCREENS);
-	// 		}
-	// 		// drawStatus(true);
-	// 		xEventGroupSetBits(displayEventGroup, DRAW_STATUSINT);
-	// 	}
-
-	// 	drawBattery();
-
-	// 	if (firstLoop)
-	// 	{
-	// 		firstLoop = false;
-	// 	}
-	// }
-
-	// Serial.println(ESP.getFreeHeap());
-	// Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
-	// Serial.println(heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT));
-
-	// uint32_t random_int = esp_random() % 10000;				 // Generate a random integer between 0 and 9999
-	// float delta = (((float)random_int / 5000.0) - 1.0) * 10; // Convert the integer to a float between -1 and 1, then scale to -5 to 5
-	// prevSpeedDelta = -0.5;
-	// speedDelta = 0.25;
-
-	// Serial.print("delta:");
-	// Serial.print(speedDelta, 3);
-	// Serial.print("(prev:");
-	// Serial.print(prevSpeedDelta, 3);
-	// Serial.println(")");
-
-	// drawSpeedDelta();
-
-	// delay(1000);
-
-	// EventBits_t eventBits = xEventGroupWaitBits(displayEventGroup, (DRAW_LAPNUMBER | DRAW_LAPTIME | DRAW_PREVTIME | DRAW_BESTLAP | DRAW_BESTTIME | DRAW_SPEEDDELTA | DRAW_TIMEDELTA | DRAW_PREDICTEDTIME | DRAW_CLEARSCREENS | DRAW_LAPLABELS),
-	// 											pdTRUE, pdTRUE, portMAX_DELAY);
 }
