@@ -68,13 +68,13 @@ MonitoringChannel monitoredChannels[] = {
 	{true, "Prev time", "channel(device(lap), previous_lap_time)*1000", 0.001, false, false},
 	{true, "Best lap", "channel(device(lap), best_lap_number)", 1.0, false, false},
 	{true, "Best time", "channel(device(lap), best_lap_time)*1000", 0.001, false, false},
-	{true, "Speed Delta", "channel(device(gps), delta_speed)*100", 0.0363, false, false}, // 0.363 multiplier to fix strange values from racechrono
+	{true, "Speed Delta", "channel(device(gps), delta_speed)*100", 0.036, false, false}, // 3.6 multiplier to convert from m/s to km/h
 	{true, "Time Delta", "channel(device(lap), delta_lap_time)*1000", 0.001, false, false},
 	{true, "Comparison time", "channel(device(lap), comparison_lap_time)*1000", 0.001, false, false},
 	{false, "Update Rate", "channel(device(gps), device_update_rate)*10", 0.1, false, false},
 	{true, "Satellites", "channel(device(gps), satellites)", 1.0, false, false},
 	{false, "Stint", "channel(device(gps), elapsed_time)", 1.0, false, false},
-	{false, "Speed", "channel(device(gps), speed)*10", 0.363, false, false}, // 0.363 multiplier to fix strange values from racechrono
+	{false, "Speed", "channel(device(gps), speed)*10", 0.36, false, false}, // 3.6 multiplier to convert from m/s to km/h
 };
 
 bool receivedData = false;
@@ -338,8 +338,8 @@ void drawLapLabels()
 	tft.setTextPadding(tft.textWidth("Predicted Lap", &fonts::Font2));
 	tft.drawString("Predicted Lap", 2, 80, &fonts::Font2);
 
-	tft.setTextPadding(tft.textWidth("Prev Lap", &fonts::Font2));
-	tft.drawString("Prev Lap", 2, 160, &fonts::Font2);
+	tft.setTextPadding(tft.textWidth("Previous Lap", &fonts::Font2));
+	tft.drawString("Previous Lap", 2, 160, &fonts::Font2);
 
 	tft.setTextPadding(tft.textWidth("Best Lap", &fonts::Font2));
 	tft.drawString("Best Lap", 2, 240, &fonts::Font2);
