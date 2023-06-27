@@ -93,7 +93,7 @@ float comparisonLapTime = 0;
 bool usingComparisonLap = false;
 int satellites = 0;
 
-float getFastestTime() { return usingComparisonLap && comparisonLapTime > 0 && (bestLapTime <= 0 || comparisonLapTime < bestLapTime) ? comparisonLapTime : bestLapTime; }
+float getFastestTime() { return usingComparisonLap && comparisonLapTime > 0 && (bestLapTime == 0 || comparisonLapTime < bestLapTime) ? comparisonLapTime : bestLapTime; }
 float getComparisonOrBest() { return usingComparisonLap && comparisonLapTime > 0 ? comparisonLapTime : bestLapTime; }
 float isBestFasterThanComparison() { return usingComparisonLap && comparisonLapTime > 0 && bestLapTime > 0 && bestLapTime < comparisonLapTime; }
 
@@ -357,13 +357,15 @@ void drawLapLabels()
 	tft.drawString("Satellites", 395, 140, &fonts::Font2);
 }
 
+#define SCREEN2TEXTCOLOR TFT_LIGHTGRAY
+
 void drawLapNumber()
 {
 	selectScreen(SCREEN2);
 
 	tft.setTextSize(1.5);
 	tft.setTextPadding(tft.textWidth("88", &fonts::Font8));
-	tft.setTextColor(TFT_LIGHTGRAY, TFT_BLACK);
+	tft.setTextColor(SCREEN2TEXTCOLOR, TFT_BLACK);
 	tft.setTextDatum(TC_DATUM);
 	tft.drawNumber(lapNumber, 388, 20, &fonts::Font8);
 }
@@ -376,7 +378,7 @@ void drawLapTime(bool useMillis)
 
 	tft.setTextSize(0.75);
 	tft.setTextPadding(tft.textWidth("8:88.88", &fonts::Font8));
-	tft.setTextColor(TFT_LIGHTGRAY, TFT_BLACK);
+	tft.setTextColor(SCREEN2TEXTCOLOR, TFT_BLACK);
 	tft.setTextDatum(TL_DATUM);
 	tft.drawString(str.c_str(), 1, 20, &fonts::Font8);
 }
@@ -389,7 +391,7 @@ void drawPredictedLapTime()
 
 	tft.setTextSize(0.75);
 	tft.setTextPadding(tft.textWidth("8:88.88", &fonts::Font8));
-	tft.setTextColor(TFT_LIGHTGRAY, TFT_BLACK);
+	tft.setTextColor(SCREEN2TEXTCOLOR, TFT_BLACK);
 	tft.setTextDatum(TL_DATUM);
 	tft.drawString(str.c_str(), 1, 100, &fonts::Font8);
 }
@@ -402,7 +404,7 @@ void drawPrevLapTime(bool hightlight)
 
 	tft.setTextSize(0.75);
 	tft.setTextPadding(tft.textWidth("8:88.88", &fonts::Font8));
-	tft.setTextColor(hightlight && getFastestTime() > 0 && prevLapTime <= getFastestTime() ? TFT_GREEN : TFT_LIGHTGRAY, TFT_BLACK);
+	tft.setTextColor(hightlight && getFastestTime() > 0 && prevLapTime < getFastestTime() ? TFT_GREEN : SCREEN2TEXTCOLOR, TFT_BLACK);
 	tft.setTextDatum(TL_DATUM);
 	tft.drawString(str.c_str(), 1, 180, &fonts::Font8);
 }
@@ -415,7 +417,7 @@ void drawBestLapTime(bool hightlight)
 
 	tft.setTextSize(0.75);
 	tft.setTextPadding(tft.textWidth("8:88.88", &fonts::Font8));
-	tft.setTextColor(hightlight && isBestFasterThanComparison() ? TFT_GREEN : TFT_LIGHTGRAY, TFT_BLACK);
+	tft.setTextColor(hightlight && isBestFasterThanComparison() ? TFT_GREEN : SCREEN2TEXTCOLOR, TFT_BLACK);
 	tft.setTextDatum(TL_DATUM);
 	tft.drawString(str.c_str(), 1, 260, &fonts::Font8);
 }
@@ -426,7 +428,7 @@ void drawBestLapNumber()
 
 	tft.setTextSize(0.75);
 	tft.setTextPadding(tft.textWidth("88", &fonts::Font8));
-	tft.setTextColor(TFT_LIGHTGRAY, TFT_BLACK);
+	tft.setTextColor(SCREEN2TEXTCOLOR, TFT_BLACK);
 	tft.setTextDatum(TC_DATUM);
 	tft.drawNumber(bestLapNumber, 340, 160, &fonts::Font8);
 }
@@ -437,7 +439,7 @@ void drawSatellites()
 
 	tft.setTextSize(0.75);
 	tft.setTextPadding(tft.textWidth("88", &fonts::Font8));
-	tft.setTextColor(TFT_LIGHTGRAY, TFT_BLACK);
+	tft.setTextColor(SCREEN2TEXTCOLOR, TFT_BLACK);
 	tft.setTextDatum(TL_DATUM);
 	tft.drawNumber(satellites, 395, 160, &fonts::Font8);
 }
@@ -456,7 +458,7 @@ void drawStintTime()
 
 	tft.setTextSize(0.7);
 	tft.setTextPadding(tft.textWidth("88:88", &fonts::Font8));
-	tft.setTextColor(TFT_LIGHTGRAY, TFT_BLACK);
+	tft.setTextColor(SCREEN2TEXTCOLOR, TFT_BLACK);
 	tft.setTextDatum(TL_DATUM);
 	tft.drawString(strBuffer, 302, 240, &fonts::Font8);
 }
