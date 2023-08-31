@@ -63,18 +63,18 @@ struct MonitoringChannel
 	bool configured;
 };
 MonitoringChannel monitoredChannels[] = {
-	{true, "Lap Number", "channel(device(lap), lap_number)", 1.0, false, false},
-	{true, "Lap Time", "channel(device(lap), lap_time)*1000", 0.001, false, false},
-	{true, "Prev time", "channel(device(lap), previous_lap_time)*1000", 0.001, false, false},
-	{true, "Best lap", "channel(device(lap), best_lap_number)", 1.0, false, false},
-	{true, "Best time", "channel(device(lap), best_lap_time)*1000", 0.001, false, false},
-	{true, "Speed Delta", "channel(device(gps), delta_speed)*100", 0.036, false, false}, // 3.6 multiplier to convert from m/s to km/h
-	{true, "Time Delta", "channel(device(lap), delta_lap_time)*1000", 0.001, false, false},
-	{true, "Comparison time", "channel(device(lap), comparison_lap_time)*1000", 0.001, false, false},
-	{false, "Update Rate", "channel(device(gps), device_update_rate)*10", 0.1, false, false},
-	{true, "Satellites", "channel(device(gps), satellites)", 1.0, false, false},
-	{false, "Stint", "channel(device(gps), elapsed_time)", 1.0, false, false},
-	{false, "Speed", "channel(device(gps), speed)*10", 0.36, false, false}, // 3.6 multiplier to convert from m/s to km/h
+	/* 0 */ {true, "Lap Number", "channel(device(lap), lap_number)", 1.0, false, false},
+	/* 1 */ {true, "Lap Time", "channel(device(lap), lap_time)*1000", 0.001, false, false},
+	/* 2 */ {true, "Prev time", "channel(device(lap), previous_lap_time)*1000", 0.001, false, false},
+	/* 3 */ {true, "Best lap", "channel(device(lap), best_lap_number)", 1.0, false, false},
+	/* 4 */ {true, "Best time", "channel(device(lap), best_lap_time)*1000", 0.001, false, false},
+	/* 5 */ {true, "Speed Delta", "channel(device(calc), delta_speed)*100", 0.036, false, false}, // 3.6 multiplier to convert from m/s to km/h
+	/* 6 */ {true, "Time Delta", "channel(device(lap), delta_lap_time)*1000", 0.001, false, false},
+	/* 7 */ {true, "Comparison time", "channel(device(lap), comparison_lap_time)*1000", 0.001, false, false},
+	/* 8 */ {false, "Update Rate", "channel(device(gps), device_update_rate)*10", 0.1, false, false},
+	/* 9 */ {true, "Satellites", "channel(device(gps), satellites)", 1.0, false, false},
+	/* 10 */ //{false, "Stint", "channel(device(gps), elapsed_time)", 1.0, false, false},
+	/* 11 */ //{false, "Speed", "channel(device(gps), speed)*10", 0.36, false, false}, // 3.6 multiplier to convert from m/s to km/h
 };
 
 bool receivedData = false;
@@ -404,7 +404,7 @@ void drawPrevLapTime(bool hightlight)
 
 	tft.setTextSize(0.75);
 	tft.setTextPadding(tft.textWidth("8:88.88", &fonts::Font8));
-	tft.setTextColor(hightlight && getFastestTime() > 0 && prevLapTime < getFastestTime() ? TFT_GREEN : SCREEN2TEXTCOLOR, TFT_BLACK);
+	tft.setTextColor(hightlight && getFastestTime() > 0 && prevLapTime <= getFastestTime() ? TFT_GREEN : SCREEN2TEXTCOLOR, TFT_BLACK);
 	tft.setTextDatum(TL_DATUM);
 	tft.drawString(str.c_str(), 1, 180, &fonts::Font8);
 }
@@ -973,10 +973,10 @@ class MonitorCallbacks : public BLECharacteristicCallbacks
 
 					float value = (float)data * monitoredChannels[monitorId].multiplier;
 
-					// Serial.print(monitoredChannels[monitorId].name);
-					// Serial.print(" : ");
-					// Serial.print(value);
-					// Serial.println();
+					Serial.print(monitoredChannels[monitorId].name);
+					Serial.print(" : ");
+					Serial.print(value);
+					Serial.println();
 
 					switch (monitorId)
 					{
@@ -1060,10 +1060,20 @@ class MonitorCallbacks : public BLECharacteristicCallbacks
 
 						break;
 
+					// 8 - update rate
+					case 8:
+
+						break;
+
 					// 9 - Satellites
 					case 9:
 						satellites = value;
 						drawSatellites();
+
+						break;
+
+					// 10 - Speed
+					case 10:
 
 						break;
 
@@ -1083,7 +1093,7 @@ class MonitorCallbacks : public BLECharacteristicCallbacks
 			if (receivedData)
 			{
 				// draw stint time and battery here
-				// tried to seperate it so its not tied to the reception of ble notification
+				// tried to seperate it so its not tied to the reception of ble notifications
 				// but absolutely nothing else worked, weird concurrency issues with the TFTs
 				currentTime = millis();
 				if (currentTime - previousTimeIntervalTime >= timeInterval)
