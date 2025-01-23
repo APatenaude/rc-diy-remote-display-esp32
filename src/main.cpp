@@ -20,39 +20,38 @@
 #include <LovyanGFX.hpp>
 #include <LGFX_TFT_eSPI.hpp>
 
+#pragma region Data
+
+int lapNumber = 0;
+float lapTime = 0;
+float prevLapTime = 0;
+int bestLapNumber = 0;
+float bestLapTime = 0;
+float prevSpeedDelta = 0;
+float speedDelta = 0;
+float prevTimeDelta = 0;
+float timeDelta = 0;
+float predictedLapTime = 0;
+float comparisonLapTime = 0;
+bool usingComparisonLap = false;
+int satellites = 0;
+unsigned long currentTime = 0;
+unsigned long previousBatteryIntervalTime = 0;
+unsigned long previousTimeIntervalTime = 0;
+unsigned long startTime;
+
+float getFastestTime() { return usingComparisonLap && comparisonLapTime > 0 && (bestLapTime == 0 || comparisonLapTime < bestLapTime) ? comparisonLapTime : bestLapTime; }
+float getComparisonOrBest() { return usingComparisonLap && comparisonLapTime > 0 ? comparisonLapTime : bestLapTime; }
+float isBestFasterThanComparison() { return usingComparisonLap && comparisonLapTime > 0 && bestLapTime > 0 && bestLapTime < comparisonLapTime; }
+
+#pragma endregion Data
+
+#pragma region Config
+
 #define SCREEN1 33
 #define SCREEN2 25
-TFT_eSPI tft = TFT_eSPI();
-
-bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h,
-				uint16_t *bitmap)
-{
-	if (y >= tft.height())
-		return 0;
-	tft.pushImage(x, y, w, h, bitmap);
-	return 1;
-}
-
+#define VBAT_PIN 34
 #define RACECHRONO_UUID "00001ff8-0000-1000-8000-00805f9b34fb"
-BLEServer *BLE_server = NULL;
-BLEService *BLE_service = NULL;
-BLECharacteristic *monitorConfigCharacteristic = NULL;
-BLECharacteristic *monitorNotificationCharacteristic = NULL;
-bool deviceConnected = false;
-#define CMD_TYPE_REMOVE_ALL 0
-#define CMD_TYPE_REMOVE 1
-#define CMD_TYPE_ADD_INCOMPLETE 2
-#define CMD_TYPE_ADD 3
-#define CMD_TYPE_UPDATE_ALL 4
-#define CMD_TYPE_UPDATE 5
-#define CMD_RESULT_OK 0
-#define CMD_RESULT_PAYLOAD_OUT_OF_SEQUENCE 1
-#define CMD_RESULT_EQUATION_EXCEPTION 2
-#define MAX_REMAINING_PAYLOAD 2048
-#define MAX_PAYLOAD_PART 17
-#define MONITOR_NAME_MAX 32
-#define MONITORS_MAX 255
-bool isConfigured = false;
 struct MonitoringChannel
 {
 	bool enabled;
@@ -76,33 +75,29 @@ MonitoringChannel monitoredChannels[] = {
 	/* 10 */ //{false, "Stint", "channel(device(gps), elapsed_time)", 1.0, false, false},
 	/* 11 */ //{false, "Speed", "channel(device(gps), speed)*10", 0.36, false, false}, // 3.6 multiplier to convert from m/s to km/h
 };
+#define SPEED_DELTA_MAX 8
+#define SPEED_DELTA_Y 120
+const unsigned long batteryLevelDrawInterval = 3000;
+const unsigned long stintTimeDrawInterval = 250;
+#define SPEED_LINES_COLOR 0xB4B4B4
+#define SCREEN2TEXTCOLOR TFT_LIGHTGRAY
+const int vref = 1100;
+const float voltageCorrectionFactor = 0.975;
 
-bool receivedData = false;
-bool removedLapTime = false;
-int lapNumber = 0;
-float lapTime = 0;
-float prevLapTime = 0;
-int bestLapNumber = 0;
-float bestLapTime = 0;
-float prevSpeedDelta = 0;
-float speedDelta = 0;
-float prevTimeDelta = 0;
-float timeDelta = 0;
-float predictedLapTime = 0;
-float comparisonLapTime = 0;
-bool usingComparisonLap = false;
-int satellites = 0;
+#pragma endregion Config
 
-float getFastestTime() { return usingComparisonLap && comparisonLapTime > 0 && (bestLapTime == 0 || comparisonLapTime < bestLapTime) ? comparisonLapTime : bestLapTime; }
-float getComparisonOrBest() { return usingComparisonLap && comparisonLapTime > 0 ? comparisonLapTime : bestLapTime; }
-float isBestFasterThanComparison() { return usingComparisonLap && comparisonLapTime > 0 && bestLapTime > 0 && bestLapTime < comparisonLapTime; }
+#pragma region Display
 
-unsigned long currentTime = 0;
-unsigned long previousBatteryIntervalTime = 0;
-const unsigned long batteryInterval = 3000;
-unsigned long previousTimeIntervalTime = 0;
-const unsigned long timeInterval = 250;
-unsigned long startTime;
+TFT_eSPI tft = TFT_eSPI();
+
+bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h,
+				uint16_t *bitmap)
+{
+	if (y >= tft.height())
+		return 0;
+	tft.pushImage(x, y, w, h, bitmap);
+	return 1;
+}
 
 void selectScreen(uint8_t screen)
 {
@@ -137,26 +132,45 @@ void screensOff()
 #define STATUS_DATA 3
 int status = 0;
 int statusYPos = 1000;
-int yInterval = 60;
-void drawStatus(bool increaseInterval = false)
+int statusDrawYInterval = 60;
+void drawStatus(bool increaseInterval = false, bool clearPrevious = true, int yPos = -1)
 {
 	if (status == 0)
 		return;
 
+	int textWidth = tft.textWidth("waiting for configuration", &fonts::Font4);
+
 	screensOn();
 	tft.setTextSize(1);
-	tft.setTextPadding(tft.textWidth("waiting for configuration", &fonts::Font4));
+	tft.setTextPadding(textWidth);
 	tft.setTextColor(TFT_WHITE, TFT_BLACK);
 	tft.setTextDatum(TC_DATUM);
 
-	// move the status around to prevent image retention
-	if (increaseInterval)
+	if (yPos >= 0)
 	{
-		tft.fillRect(0, statusYPos, tft.width(), 40);
-		if (statusYPos + yInterval > tft.height() - yInterval)
+		if (yPos >= tft.height())
+		{
+			yPos = yPos - tft.height();
+			selectScreen(SCREEN2);
+		}
+		else
+			selectScreen(SCREEN1);
+		statusYPos = yPos;
+	}
+	// move the status around to prevent image retention
+	else if (increaseInterval)
+	{
+
+		if (clearPrevious)
+		{
+			tft.fillRect(tft.width() / 2 - textWidth / 2, statusYPos, textWidth, 30, TFT_BLACK);
+			tft.setTextColor(TFT_WHITE, TFT_BLACK);
+		}
+
+		if (statusYPos + statusDrawYInterval > tft.height() - statusDrawYInterval)
 			statusYPos = 10;
 		else
-			statusYPos += yInterval;
+			statusYPos += statusDrawYInterval;
 	}
 
 	switch (status)
@@ -182,11 +196,9 @@ void clearScreens()
 	tft.fillScreen(TFT_BLACK);
 }
 
-void drawTimeDelta()
+void drawTimeDelta(float value)
 {
 	selectScreen(SCREEN1);
-
-	const float value = timeDelta;
 
 	const int color = value >= 0 ? TFT_RED : TFT_GREEN;
 	const float deltaAbs = fabs(value);
@@ -204,19 +216,21 @@ void drawTimeDelta()
 	tft.setTextDatum(CL_DATUM);
 	tft.drawString(value >= 0 ? "+" : "-", 2, 65, &fonts::Font4);
 }
+void drawTimeDelta()
+{
+	drawTimeDelta(timeDelta);
+}
 
-#define SPEED_DELTA_MAX 10
-#define SPEED_DELTA_Y 120
-void drawSpeedDelta()
+void drawSpeedDelta(float value, float prevValue)
 {
 	selectScreen(SCREEN1);
 
 	// could use a sprite instead of this algorithm to avoid flickering but at ~240x480 it would take up a lot of ram
 
-	const int color = speedDelta < 0 ? TFT_RED : TFT_GREEN;
-	const int width = floor(fabs(speedDelta) * (tft.width() / SPEED_DELTA_MAX));
-	const int prevColor = prevSpeedDelta < 0 ? TFT_RED : TFT_GREEN;
-	const int prevWidth = floor(fabs(prevSpeedDelta) * (tft.width() / SPEED_DELTA_MAX));
+	const int color = value < 0 ? TFT_RED : TFT_GREEN;
+	const int width = floor(fabs(value) * (tft.width() / SPEED_DELTA_MAX));
+	const int prevColor = prevValue < 0 ? TFT_RED : TFT_GREEN;
+	const int prevWidth = floor(fabs(prevValue) * (tft.width() / SPEED_DELTA_MAX));
 
 	if (color == prevColor)
 	{
@@ -241,7 +255,7 @@ void drawSpeedDelta()
 			// left
 			tft.fillRect(floor((tft.width() - prevWidth) / 2), SPEED_DELTA_Y, ceil(diff / 2) + 1, tft.height() - SPEED_DELTA_Y, TFT_BLACK);
 			// rigth
-			tft.fillRect(ceil(tft.width() / 2 + width / 2) - 1, SPEED_DELTA_Y, ceil(diff / 2) + 2, tft.height() - SPEED_DELTA_Y, TFT_BLACK);
+			tft.fillRect(ceil(tft.width() / 2 + width / 2), SPEED_DELTA_Y, ceil(diff / 2) + 2, tft.height() - SPEED_DELTA_Y, TFT_BLACK);
 		}
 	}
 	else
@@ -257,47 +271,38 @@ void drawSpeedDelta()
 			// left
 			tft.fillRect(floor((tft.width() - prevWidth) / 2), SPEED_DELTA_Y, ceil(diff / 2) + 1, tft.height() - SPEED_DELTA_Y, TFT_BLACK);
 			// rigth
-			tft.fillRect(floor(tft.width() / 2 + width / 2) - 1, SPEED_DELTA_Y, ceil(diff / 2) + 2, tft.height() - SPEED_DELTA_Y, TFT_BLACK);
+			tft.fillRect(floor(tft.width() / 2 + width / 2), SPEED_DELTA_Y, ceil(diff / 2) + 2, tft.height() - SPEED_DELTA_Y, TFT_BLACK);
 		}
 	}
 
-	int spacing = tft.width() / 20;
+	int sections = SPEED_DELTA_MAX * 2;
+	int spacing = tft.width() / sections;
 
-#define lines_color 0xB4B4B4
-
-	tft.drawLine(0, tft.height() - 20, 0, tft.height(), lines_color);								//-10
-	tft.drawLine(spacing, tft.height() - 12, spacing, tft.height(), lines_color);					//-9
-	tft.drawLine(2 * spacing, tft.height() - 12, 2 * spacing, tft.height(), lines_color);			//-8
-	tft.drawLine(3 * spacing, tft.height() - 12, 3 * spacing, tft.height(), lines_color);			//-7
-	tft.drawLine(4 * spacing, tft.height() - 12, 4 * spacing, tft.height(), lines_color);			//-6
-	tft.drawLine(5 * spacing, tft.height() - 20, 5 * spacing, tft.height(), lines_color);			//-5
-	tft.drawLine(6 * spacing, tft.height() - 12, 6 * spacing, tft.height(), lines_color);			//-4
-	tft.drawLine(7 * spacing, tft.height() - 12, 7 * spacing, tft.height(), lines_color);			//-3
-	tft.drawLine(8 * spacing, tft.height() - 12, 8 * spacing, tft.height(), lines_color);			//-2
-	tft.drawLine(9 * spacing, tft.height() - 12, 9 * spacing, tft.height(), lines_color);			//-1
-	tft.drawLine(10 * spacing, tft.height() - 20, 10 * spacing, tft.height(), lines_color);			// 0
-	tft.drawLine(11 * spacing, tft.height() - 12, 11 * spacing, tft.height(), lines_color);			// 1
-	tft.drawLine(12 * spacing, tft.height() - 12, 12 * spacing, tft.height(), lines_color);			// 2
-	tft.drawLine(13 * spacing, tft.height() - 12, 13 * spacing, tft.height(), lines_color);			// 3
-	tft.drawLine(14 * spacing, tft.height() - 12, 14 * spacing, tft.height(), lines_color);			// 4
-	tft.drawLine(15 * spacing, tft.height() - 20, 15 * spacing, tft.height(), lines_color);			// 5
-	tft.drawLine(16 * spacing, tft.height() - 12, 16 * spacing, tft.height(), lines_color);			// 6
-	tft.drawLine(17 * spacing, tft.height() - 12, 17 * spacing, tft.height(), lines_color);			// 7
-	tft.drawLine(18 * spacing, tft.height() - 12, 18 * spacing, tft.height(), lines_color);			// 8
-	tft.drawLine(19 * spacing, tft.height() - 12, 19 * spacing, tft.height(), lines_color);			// 9
-	tft.drawLine(20 * spacing - 1, tft.height() - 20, 20 * spacing - 1, tft.height(), lines_color); // 10
+	for (int i = 0; i <= sections; i++)
+	{
+		tft.drawLine(i * spacing - (i == sections ? 1 : i == 0 ? -1
+															   : 0),
+					 tft.height() - (i % (sections / 4) == 0 ? 20 : 12),
+					 i * spacing - (i == sections ? 1 : i == 0 ? -1
+															   : 0),
+					 tft.height(), SPEED_LINES_COLOR);
+	}
 
 	tft.setTextSize(1);
-	tft.setTextColor(lines_color);
+	tft.setTextColor(SPEED_LINES_COLOR);
 	tft.setTextPadding(0);
 	tft.setTextDatum(BL_DATUM);
-	tft.drawNumber(SPEED_DELTA_MAX, 0, tft.height() - 20 + 1, &fonts::Font2); // -10
+	tft.drawNumber(SPEED_DELTA_MAX, 1, tft.height() - 20 + 1, &fonts::Font2); // -SPEED_DELTA_MAX
 	tft.setTextDatum(BR_DATUM);
-	tft.drawNumber(SPEED_DELTA_MAX, tft.width() + 1, tft.height() - 20 + 1, &fonts::Font2); // +10
+	tft.drawNumber(SPEED_DELTA_MAX, tft.width() + 1, tft.height() - 20 + 1, &fonts::Font2); // +SPEED_DELTA_MAX
 	tft.setTextDatum(BC_DATUM);
-	tft.drawNumber(SPEED_DELTA_MAX / 2, 5 * spacing + 1, tft.height() - 20 + 1, &fonts::Font2);	 // -5
-	tft.drawNumber(0, 10 * spacing + 1, tft.height() - 20 + 1, &fonts::Font2);					 // 0
-	tft.drawNumber(SPEED_DELTA_MAX / 2, 15 * spacing + 1, tft.height() - 20 + 1, &fonts::Font2); // +5
+	tft.drawNumber(0, tft.width() / 2 + 1, tft.height() - 20 + 1, &fonts::Font2);								 // 0
+	tft.drawNumber(SPEED_DELTA_MAX / 2, (sections / 4) * spacing + 1, tft.height() - 20 + 1, &fonts::Font2);	 // -SPEED_DELTA_MAX/2
+	tft.drawNumber(SPEED_DELTA_MAX / 2, (sections / 4) * 3 * spacing + 1, tft.height() - 20 + 1, &fonts::Font2); // +SPEED_DELTA_MAX/2
+}
+void drawSpeedDelta()
+{
+	drawSpeedDelta(speedDelta, prevSpeedDelta);
 }
 
 std::string getFloatTimeString(float time)
@@ -357,9 +362,7 @@ void drawLapLabels()
 	tft.drawString("Satellites", 395, 140, &fonts::Font2);
 }
 
-#define SCREEN2TEXTCOLOR TFT_LIGHTGRAY
-
-void drawLapNumber()
+void drawLapNumber(int value)
 {
 	selectScreen(SCREEN2);
 
@@ -367,14 +370,18 @@ void drawLapNumber()
 	tft.setTextPadding(tft.textWidth("88", &fonts::Font8));
 	tft.setTextColor(SCREEN2TEXTCOLOR, TFT_BLACK);
 	tft.setTextDatum(TC_DATUM);
-	tft.drawNumber(lapNumber, 388, 20, &fonts::Font8);
+	tft.drawNumber(value, 388, 20, &fonts::Font8);
+}
+void drawLapNumber()
+{
+	drawLapNumber(lapNumber);
 }
 
-void drawLapTime(bool useMillis)
+void drawLapTime(float value)
 {
 	selectScreen(SCREEN2);
 
-	std::string str = getFloatTimeString(lapTime);
+	std::string str = getFloatTimeString(value);
 
 	tft.setTextSize(0.75);
 	tft.setTextPadding(tft.textWidth("8:88.88", &fonts::Font8));
@@ -382,12 +389,16 @@ void drawLapTime(bool useMillis)
 	tft.setTextDatum(TL_DATUM);
 	tft.drawString(str.c_str(), 1, 20, &fonts::Font8);
 }
+void drawLapTime()
+{
+	drawLapTime(lapTime);
+}
 
-void drawPredictedLapTime()
+void drawPredictedLapTime(float value)
 {
 	selectScreen(SCREEN2);
 
-	std::string str = getFloatTimeString(predictedLapTime);
+	std::string str = getFloatTimeString(value);
 
 	tft.setTextSize(0.75);
 	tft.setTextPadding(tft.textWidth("8:88.88", &fonts::Font8));
@@ -395,12 +406,16 @@ void drawPredictedLapTime()
 	tft.setTextDatum(TL_DATUM);
 	tft.drawString(str.c_str(), 1, 100, &fonts::Font8);
 }
+void drawPredictedLapTime()
+{
+	drawPredictedLapTime(predictedLapTime);
+}
 
-void drawPrevLapTime(bool hightlight)
+void drawPrevLapTime(float value, bool hightlight)
 {
 	selectScreen(SCREEN2);
 
-	std::string str = getFloatTimeString(prevLapTime);
+	std::string str = getFloatTimeString(value);
 
 	tft.setTextSize(0.75);
 	tft.setTextPadding(tft.textWidth("8:88.88", &fonts::Font8));
@@ -408,12 +423,16 @@ void drawPrevLapTime(bool hightlight)
 	tft.setTextDatum(TL_DATUM);
 	tft.drawString(str.c_str(), 1, 180, &fonts::Font8);
 }
+void drawPrevLapTime(bool hightlight)
+{
+	drawPrevLapTime(prevLapTime, hightlight);
+}
 
-void drawBestLapTime(bool hightlight)
+void drawBestLapTime(float value, bool hightlight)
 {
 	selectScreen(SCREEN2);
 
-	std::string str = getFloatTimeString(getFastestTime());
+	std::string str = getFloatTimeString(value);
 
 	tft.setTextSize(0.75);
 	tft.setTextPadding(tft.textWidth("8:88.88", &fonts::Font8));
@@ -421,8 +440,12 @@ void drawBestLapTime(bool hightlight)
 	tft.setTextDatum(TL_DATUM);
 	tft.drawString(str.c_str(), 1, 260, &fonts::Font8);
 }
+void drawBestLapTime(bool hightlight)
+{
+	drawBestLapTime(getFastestTime(), hightlight);
+}
 
-void drawBestLapNumber()
+void drawBestLapNumber(int value)
 {
 	selectScreen(SCREEN2);
 
@@ -430,10 +453,14 @@ void drawBestLapNumber()
 	tft.setTextPadding(tft.textWidth("88", &fonts::Font8));
 	tft.setTextColor(SCREEN2TEXTCOLOR, TFT_BLACK);
 	tft.setTextDatum(TC_DATUM);
-	tft.drawNumber(bestLapNumber, 340, 160, &fonts::Font8);
+	tft.drawNumber(value, 340, 160, &fonts::Font8);
+}
+void drawBestLapNumber()
+{
+	drawBestLapNumber(bestLapNumber);
 }
 
-void drawSatellites()
+void drawSatellites(int value)
 {
 	selectScreen(SCREEN2);
 
@@ -441,7 +468,11 @@ void drawSatellites()
 	tft.setTextPadding(tft.textWidth("88", &fonts::Font8));
 	tft.setTextColor(SCREEN2TEXTCOLOR, TFT_BLACK);
 	tft.setTextDatum(TL_DATUM);
-	tft.drawNumber(satellites, 395, 160, &fonts::Font8);
+	tft.drawNumber(value, 395, 160, &fonts::Font8);
+}
+void drawSatellites()
+{
+	drawSatellites(satellites);
 }
 
 void drawStintTime()
@@ -462,6 +493,10 @@ void drawStintTime()
 	tft.setTextDatum(TL_DATUM);
 	tft.drawString(strBuffer, 302, 240, &fonts::Font8);
 }
+
+#pragma endregion Display
+
+#pragma region Battery
 
 // Array with voltage - charge definitions
 float voltageTable[] = {
@@ -568,9 +603,6 @@ float voltageTable[] = {
 	4.200, // 100
 };
 
-#define VBAT_PIN 34
-const int vref = 1100;
-const float voltageCorrectionFactor = 0.975;
 int batteryLevel = 0;
 int batteryIconIndex = 0;
 float batteryVoltage = 0;
@@ -661,8 +693,8 @@ void drawBattery()
 	drawBatteryLevel();
 }
 
-TaskHandle_t batteryStatusTaskHandle;
-void batteryStatusTask(void *pvParameters)
+TaskHandle_t drawBatteryAndStatusTaskHandle;
+void drawBatteryAndStatusTask(void *pvParameters)
 {
 	clearScreens();
 	while (1)
@@ -674,11 +706,79 @@ void batteryStatusTask(void *pvParameters)
 
 		drawBattery();
 
-		vTaskDelay(pdMS_TO_TICKS(batteryInterval));
+		vTaskDelay(pdMS_TO_TICKS(batteryLevelDrawInterval));
 	}
 }
 
-/* ------------------------ */
+#pragma endregion Battery
+
+TaskHandle_t demoModeTaskHandle;
+void demoModeTask(void *pvParameters)
+{
+	int drawInterval = 100;
+	randomSeed(millis());
+	float _speedDelta = 0;
+	float _prevSpeedDelta = 0;
+	int direction = 1;
+	int prevBatteryIntervalTime = millis();
+
+	clearScreens();
+	drawLapLabels();
+	drawBestLapTime(random(0, 600000) / 1000.0, false);
+	drawPrevLapTime(random(0, 600000) / 1000.0, false);
+	drawBestLapNumber(random(0, 100));
+	drawSatellites(random(0, 100));
+	drawLapNumber(random(0, 100));
+	drawStatus(false, false, 610);
+
+	while (1)
+	{
+
+		drawLapTime(random(0, 600000) / 1000.0);
+		drawPredictedLapTime(random(0, 600000) / 1000.0);
+
+		drawTimeDelta(random(-10000, 10000) / 1000.0);
+
+		_prevSpeedDelta = _speedDelta;
+		if ((_speedDelta >= SPEED_DELTA_MAX) || ((_speedDelta * -1) >= SPEED_DELTA_MAX))
+			direction = direction * -1;
+		_speedDelta += direction;
+		drawSpeedDelta(_speedDelta, _prevSpeedDelta);
+
+		int batteryIntervalDelta = millis() - prevBatteryIntervalTime;
+		if (batteryIntervalDelta >= 1000)
+		{
+			prevBatteryIntervalTime = millis();
+			drawBattery();
+			drawStintTime();
+		}
+
+		// vTaskDelay(pdMS_TO_TICKS(drawInterval));
+	}
+}
+
+#pragma region BLE
+
+BLEServer *BLE_server = NULL;
+BLEService *BLE_service = NULL;
+BLECharacteristic *monitorConfigCharacteristic = NULL;
+BLECharacteristic *monitorNotificationCharacteristic = NULL;
+bool deviceConnected = false;
+#define CMD_TYPE_REMOVE_ALL 0
+#define CMD_TYPE_REMOVE 1
+#define CMD_TYPE_ADD_INCOMPLETE 2
+#define CMD_TYPE_ADD 3
+#define CMD_TYPE_UPDATE_ALL 4
+#define CMD_TYPE_UPDATE 5
+#define CMD_RESULT_OK 0
+#define CMD_RESULT_PAYLOAD_OUT_OF_SEQUENCE 1
+#define CMD_RESULT_EQUATION_EXCEPTION 2
+#define MAX_REMAINING_PAYLOAD 2048
+#define MAX_PAYLOAD_PART 17
+#define MONITOR_NAME_MAX 32
+#define MONITORS_MAX 255
+bool isConfigured = false;
+bool receivedData = false;
 
 void sendConfigCommand(int cmdType, int monitorId, const char *payload, int payloadSequence = 0)
 {
@@ -768,13 +868,6 @@ void sendRemoveCommand(int monitorId = -1)
 
 	monitorConfigCharacteristic->setValue(bytes, 2);
 	monitorConfigCharacteristic->indicate();
-}
-
-void removeLaptimeTask(void *parameter)
-{
-	sendRemoveCommand(1);
-	removedLapTime = true;
-	vTaskDelete(NULL);
 }
 
 void checkChannelsConfigured()
@@ -965,7 +1058,7 @@ class MonitorCallbacks : public BLECharacteristicCallbacks
 					{
 						receivedData = true;
 						status = 0;
-						vTaskDelete(batteryStatusTaskHandle);
+						vTaskDelete(drawBatteryAndStatusTaskHandle);
 
 						clearScreens();
 						drawLapLabels();
@@ -984,14 +1077,12 @@ class MonitorCallbacks : public BLECharacteristicCallbacks
 					case 0:
 						lapNumber = value;
 						drawLapNumber();
-
 						break;
 
 					// 1 - Lap Time
 					case 1:
 						lapTime = value;
 						drawLapTime(false);
-
 						break;
 
 					// 2 - Prev time
@@ -1001,19 +1092,16 @@ class MonitorCallbacks : public BLECharacteristicCallbacks
 						bool hightlight = prevLapTime > 0 || comparisonLapTime > 0;
 						prevLapTime = value;
 						drawPrevLapTime(hightlight);
-
 						break;
 					}
 					// 3 - Best lap
 					case 3:
 						bestLapNumber = value;
 						drawBestLapNumber();
-
 						break;
 
 					// 4 - Best time
 					case 4:
-					{
 						if (value > 1)
 						{
 							// dont hightlight first lap
@@ -1027,7 +1115,7 @@ class MonitorCallbacks : public BLECharacteristicCallbacks
 							drawPredictedLapTime();
 						}
 						break;
-					}
+
 					// 5 - Speed Delta
 					case 5:
 						prevSpeedDelta = speedDelta;
@@ -1096,11 +1184,11 @@ class MonitorCallbacks : public BLECharacteristicCallbacks
 				// tried to seperate it so its not tied to the reception of ble notifications
 				// but absolutely nothing else worked, weird concurrency issues with the TFTs
 				currentTime = millis();
-				if (currentTime - previousTimeIntervalTime >= timeInterval)
+				if (currentTime - previousTimeIntervalTime >= stintTimeDrawInterval)
 				{
 					drawStintTime();
 				}
-				if (currentTime - previousBatteryIntervalTime >= batteryInterval)
+				if (currentTime - previousBatteryIntervalTime >= batteryLevelDrawInterval)
 				{
 					previousBatteryIntervalTime = currentTime;
 
@@ -1119,8 +1207,22 @@ class ServerCallbacks : public BLEServerCallbacks
 		deviceConnected = true;
 		startTime = millis();
 		Serial.println("[I] Bluetooth client connected!");
+		Serial.println("set status");
 		status = STATUS_CONFIGURATION;
-		drawStatus();
+		// drawStatus();
+		if (demoModeTaskHandle != NULL)
+		{
+			Serial.println("delete demo");
+			vTaskDelete(demoModeTaskHandle);
+			demoModeTaskHandle = NULL;
+			Serial.println("deleted demo");
+		}
+		if (drawBatteryAndStatusTaskHandle == NULL)
+		{
+			Serial.println("start task");
+			xTaskCreatePinnedToCore(drawBatteryAndStatusTask, "Battery & Status Task", 2048, NULL, 0, &drawBatteryAndStatusTaskHandle, 0);
+			Serial.println("started task");
+		}
 	};
 
 	void onDisconnect(BLEServer *BLE_server)
@@ -1139,7 +1241,10 @@ class ServerCallbacks : public BLEServerCallbacks
 		Serial.println("[I] Bluetooth device discoverable");
 
 		status = STATUS_CONNECTION;
-		xTaskCreatePinnedToCore(batteryStatusTask, "Battery & Status Task", 2048, NULL, 0, &batteryStatusTaskHandle, 0);
+		if (drawBatteryAndStatusTaskHandle == NULL)
+		{
+			xTaskCreatePinnedToCore(drawBatteryAndStatusTask, "Battery & Status Task", 2048, NULL, 0, &drawBatteryAndStatusTaskHandle, 0);
+		}
 	}
 };
 
@@ -1181,8 +1286,11 @@ void configBLE()
 	BLEDevice::startAdvertising();
 
 	status = STATUS_CONNECTION;
-	xTaskCreatePinnedToCore(batteryStatusTask, "Battery & Status Task", 2048, NULL, 0, &batteryStatusTaskHandle, 0);
+	// xTaskCreatePinnedToCore(drawBatteryAndStatusTask, "Battery & Status Task", 2048, NULL, 0, &drawBatteryAndStatusTaskHandle, 0);
+	xTaskCreatePinnedToCore(demoModeTask, "Demo Mode Task", 2048, NULL, 0, &demoModeTaskHandle, 0);
 }
+
+#pragma endregion BLE
 
 void setup()
 {
@@ -1219,12 +1327,9 @@ void setup()
 
 void loop()
 {
-	if (deviceConnected)
+	if (deviceConnected && !isConfigured && status == STATUS_CONFIGURATION)
 	{
-		if (!isConfigured)
-		{
-			// continually check if all the channels are configured or configuring
-			checkChannelsConfigured();
-		}
+		// continually check if all the channels are configured or configuring
+		checkChannelsConfigured();
 	}
 }
